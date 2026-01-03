@@ -17,7 +17,6 @@ L(x, y) = -delta_y(x) + lambda * sum_c exp(delta_c(x))
 - `lambda_reg_sweep.py`: CIFAR-10/100 and FashionMNIST experiments with a
   sweep over `lambda_reg` values.
 - `DNLL.ipynb`: exploratory notebook (training and analysis).
-- `cifar100_model.pth`: example checkpoint.
 - `plots/`: output folder for sweep metrics/plots.
 
 ## Quickstart
