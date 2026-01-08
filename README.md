@@ -1,7 +1,7 @@
 # DNLL
 
 Discriminative Negative Log-Likelihood (DNLL) for Deep Linear Discriminant Analysis.
-This repo accompanies the paper `Deep_LDA_Revisited.pdf` in this folder.
+This repo accompanies the paper https://arxiv.org/abs/2601.01619.
 
 DNLL augments the LDA log-likelihood with a discriminative penalty that discourages
 regions where multiple classes are simultaneously likely. For class score functions
@@ -57,10 +57,9 @@ Results are saved as JSON in `plots/` by default.
 
 ## Paper
 
-See `Deep_LDA_Revisited.pdf` for full details on the motivation, derivation, and
-experimental setup.
+See https://arxiv.org/abs/2601.01619 for full details on the motivation,
+derivation, and experimental setup.
 
-<!--
 ## Citation
 
 If you use this code, please cite the paper:
@@ -70,10 +69,9 @@ If you use this code, please cite the paper:
   title  = {Deep Linear Discriminant Analysis Revisited},
   author = {Tezekbayev, Maxat and Takhanov, Rustem and Bolatov, Arman and Assylbekov, Zhenisbek},
   year   = {2025},
-  note   = {Manuscript, see Deep_LDA_Revisited.pdf}
+  note   = {Manuscript, see https://arxiv.org/abs/2601.01619}
 }
 ```
--->
 
 ## License
 
