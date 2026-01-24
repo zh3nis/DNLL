@@ -83,9 +83,115 @@ class LDAHead(nn.Module):
         log_cov_diag = self.log_cov_diag.to(z.dtype)
         var = torch.exp(log_cov_diag)
         m2 = (diff * diff / var).sum(-1)
-        log_det = log_cov_diag.sum()
+        log_det = log_cov_diag.sum(dim=-1)
         log_prior = torch.log_softmax(self.prior_logits, dim=0)
         return log_prior.unsqueeze(0) - 0.5 * (m2 + log_det)
+
+
+class MDAHead(nn.Module):
+    """MDA classifier with mixture means per class, component covariances, and trainable priors."""
+
+    def __init__(self, C, D, K, covariance_type="spherical", min_scale=1e-4):
+        super().__init__()
+        if D < 1:
+            raise ValueError(f"D must be positive (got D={D}).")
+        if K < 1:
+            raise ValueError(f"K must be positive (got K={K}).")
+        self.C = C
+        self.D = D
+        self.K = K
+        cov_type = str(covariance_type).lower()
+        if cov_type not in {"spherical", "diag", "full"}:
+            raise ValueError(
+                "covariance_type must be one of {'spherical', 'diag', 'full'} "
+                f"(got {covariance_type!r})."
+            )
+        self.covariance_type = cov_type
+        self.min_scale = min_scale
+        dtype = torch.get_default_dtype()
+        # Start component means from a normal distribution instead of a fixed layout.
+        self.mu = nn.Parameter(
+            torch.randn(C, K, D, dtype=dtype) * 6.0 / math.sqrt(2 * D)
+            #torch.zeros(C, K, D, dtype=dtype)
+            #torch.randn(C, K, D, dtype=dtype) * .001
+        )
+        self.prior_logits = nn.Parameter(torch.zeros(C, dtype=dtype))
+        self.mixture_logits = nn.Parameter(torch.zeros(C, K, dtype=dtype))
+        if self.covariance_type == "spherical":
+            self.log_cov = nn.Parameter(torch.zeros(C, K, dtype=dtype))
+        elif self.covariance_type == "diag":
+            self.log_cov_diag = nn.Parameter(torch.zeros(C, K, D, dtype=dtype))
+        else:
+            self.raw_tril = nn.Parameter(torch.zeros(C, K, D, D, dtype=dtype))
+
+    def _get_cholesky(self, dtype, device):
+        raw = torch.tril(self.raw_tril.to(device=device, dtype=dtype))
+        diag = torch.diagonal(raw, 0, dim1=-2, dim2=-1)
+        safe_diag = F.softplus(diag) + self.min_scale
+        L = raw - torch.diag_embed(diag) + torch.diag_embed(safe_diag)
+        return L
+
+    @property
+    def cov_diag(self):
+        if self.covariance_type == "spherical":
+            return torch.exp(self.log_cov).unsqueeze(-1).repeat(1, 1, self.D)
+        if self.covariance_type == "diag":
+            return torch.exp(self.log_cov_diag)
+        return torch.diagonal(self.covariance, dim1=-2, dim2=-1)
+
+    @property
+    def covariance(self):
+        """Full covariance matrix Sigma = L L^T."""
+        if self.covariance_type != "full":
+            raise AttributeError("covariance is only defined for full covariance.")
+        L = self._get_cholesky(self.raw_tril.dtype, self.raw_tril.device)
+        return L @ L.transpose(-2, -1)
+
+    def forward(self, z):
+        if self.covariance_type == "full":
+            dtype = z.dtype
+            device = z.device
+            mu = self.mu.to(device=device, dtype=dtype)
+            diff = z.unsqueeze(1).unsqueeze(2) - mu.unsqueeze(0)
+            L = self._get_cholesky(dtype, device)
+            solved = torch.linalg.solve_triangular(
+                L.unsqueeze(0), diff.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            m2 = (solved * solved).sum(dim=-1)
+            log_det = 2.0 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(dim=-1)
+            log_prior = torch.log_softmax(
+                self.prior_logits.to(device=device, dtype=dtype), dim=0
+            )
+            log_mix = torch.log_softmax(
+                self.mixture_logits.to(device=device, dtype=dtype), dim=-1
+            )
+            log_comp = -0.5 * (m2 + log_det.unsqueeze(0))
+            return log_prior.unsqueeze(0) + torch.logsumexp(
+                log_mix.unsqueeze(0) + log_comp, dim=-1
+            )
+
+        mu = self.mu.to(z.dtype)
+        diff = z.unsqueeze(1).unsqueeze(2) - mu.unsqueeze(0)
+        log_prior = torch.log_softmax(self.prior_logits, dim=0)
+        log_mix = torch.log_softmax(self.mixture_logits, dim=-1)
+        if self.covariance_type == "spherical":
+            m2 = (diff * diff).sum(-1)
+            log_cov = self.log_cov.to(z.dtype)
+            var = torch.exp(log_cov)
+            log_det = self.D * log_cov
+            log_comp = -0.5 * (m2 / var.unsqueeze(0) + log_det.unsqueeze(0))
+            return log_prior.unsqueeze(0) + torch.logsumexp(
+                log_mix.unsqueeze(0) + log_comp, dim=-1
+            )
+
+        log_cov_diag = self.log_cov_diag.to(z.dtype)
+        var = torch.exp(log_cov_diag)
+        m2 = (diff * diff / var).sum(-1)
+        log_det = log_cov_diag.sum()
+        log_comp = -0.5 * (m2 + log_det.unsqueeze(0))
+        return log_prior.unsqueeze(0) + torch.logsumexp(
+            log_mix.unsqueeze(0) + log_comp, dim=-1
+        )
 
 
 def dnll_loss(
