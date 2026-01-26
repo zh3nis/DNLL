@@ -103,7 +103,7 @@ class MDAHead(nn.Module):
         self.covariance_type = "spherical"
         dtype = torch.get_default_dtype()
         # Start component means from a normal distribution, independently per component.
-        base_scale = 4.0 / math.sqrt(2 * D)
+        base_scale = 6.0 / math.sqrt(2 * D)
         self.mu = nn.Parameter(torch.randn(C, K, D, dtype=dtype) * base_scale)
         self.prior_logits = nn.Parameter(torch.zeros(C, dtype=dtype))
         self.mixture_logits = nn.Parameter(torch.zeros(C, K, dtype=dtype))
