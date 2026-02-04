@@ -104,7 +104,14 @@ class MDAHead(nn.Module):
         dtype = torch.get_default_dtype()
         # Start component means from a normal distribution, independently per component.
         base_scale = 6.0 / math.sqrt(2 * D)
-        self.mu = nn.Parameter(torch.randn(C, K, D, dtype=dtype) * base_scale)
+        # self.mu = nn.Parameter(torch.randn(C, K, D, dtype=dtype) * base_scale)
+        # Previous: start class means then add small noise per component.
+        class_means = torch.randn(C, D, dtype=dtype) * base_scale
+        noise_scale = 0.1 * base_scale
+        self.mu = nn.Parameter(
+            class_means.unsqueeze(1).repeat(1, K, 1)
+            + torch.randn(C, K, D, dtype=dtype) * noise_scale
+        )
         self.prior_logits = nn.Parameter(torch.zeros(C, dtype=dtype))
         self.mixture_logits = nn.Parameter(torch.zeros(C, K, dtype=dtype))
         self.log_cov = nn.Parameter(torch.zeros(C, K, dtype=dtype))
