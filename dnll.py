@@ -3,6 +3,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+def _regular_simplex_vertices(C, D, scale, dtype, device):
+    if C < 1:
+        raise ValueError(f"C must be positive (got C={C}).")
+    if D < 1:
+        raise ValueError(f"D must be positive (got D={D}).")
+    if C == 1:
+        return torch.zeros(1, D, dtype=dtype, device=device)
+    if D < C - 1:
+        raise ValueError(
+            f"D must be at least C-1 to embed a regular simplex "
+            f"(got D={D}, C={C})."
+        )
+    eye = torch.eye(C, dtype=dtype, device=device)
+    centered = eye - eye.mean(dim=0, keepdim=True)
+    q, _ = torch.linalg.qr(centered, mode="reduced")
+    basis = q[:, : C - 1]
+    vertices = centered @ basis
+    vertices = vertices / vertices.norm(dim=-1, keepdim=True)
+    vertices = vertices * scale
+    if D == C - 1:
+        return vertices
+    pad = torch.zeros(C, D - (C - 1), dtype=dtype, device=device)
+    return torch.cat([vertices, pad], dim=-1)
+
 class LDAHead(nn.Module):
     """LDA classifier with trainable means, shared covariance, and trainable priors."""
 
@@ -134,6 +158,52 @@ class MDAHead(nn.Module):
             log_mix.unsqueeze(0) + log_comp, dim=-1
         )
 
+
+class SimplexMDAHead(nn.Module):
+    """MDA classifier with fixed simplex class means and trainable components."""
+
+    def __init__(self, C, D, K):
+        super().__init__()
+        if D < 1:
+            raise ValueError(f"D must be positive (got D={D}).")
+        if K < 1:
+            raise ValueError(f"K must be positive (got K={K}).")
+        self.C = C
+        self.D = D
+        self.K = K
+        self.covariance_type = "spherical"
+        dtype = torch.get_default_dtype()
+        base_scale = 6.0 / math.sqrt(2 * D)
+        class_means = _regular_simplex_vertices(
+            C=C, D=D, scale=base_scale, dtype=dtype, device=torch.device("cpu")
+        )
+        self.register_buffer("class_means", class_means)
+        noise_scale = 0.1 * base_scale
+        self.mu = nn.Parameter(
+            class_means.unsqueeze(1).repeat(1, K, 1)
+            + torch.randn(C, K, D, dtype=dtype) * noise_scale
+        )
+        self.prior_logits = nn.Parameter(torch.zeros(C, dtype=dtype))
+        self.mixture_logits = nn.Parameter(torch.zeros(C, K, dtype=dtype))
+        self.log_cov = nn.Parameter(torch.zeros(C, K, dtype=dtype))
+
+    @property
+    def cov_diag(self):
+        return torch.exp(self.log_cov).unsqueeze(-1).repeat(1, 1, self.D)
+
+    def forward(self, z):
+        mu = self.mu.to(z.dtype)
+        diff = z.unsqueeze(1).unsqueeze(2) - mu.unsqueeze(0)
+        log_prior = torch.log_softmax(self.prior_logits, dim=0)
+        log_mix = torch.log_softmax(self.mixture_logits, dim=-1)
+        m2 = (diff * diff).sum(-1)
+        log_cov = self.log_cov.to(z.dtype)
+        var = torch.exp(log_cov)
+        log_det = self.D * log_cov
+        log_comp = -0.5 * (m2 / var.unsqueeze(0) + log_det.unsqueeze(0))
+        return log_prior.unsqueeze(0) + torch.logsumexp(
+            log_mix.unsqueeze(0) + log_comp, dim=-1
+        )
 
 def dnll_loss(
     input: torch.Tensor,
